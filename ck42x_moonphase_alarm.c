@@ -2,6 +2,8 @@
 #include <furi_hal.h>
 #include <gui/gui.h>
 #include <gui/view_port.h>
+#include <notification/notification.h>
+#include <notification/notification_messages.h>
 #include <furi_hal_infrared.h>
 #include <furi_hal_subghz.h>
 #include <infrared/worker/infrared_transmit.h>
@@ -19,10 +21,13 @@
 #define COUNTER_SAVE_DIR STORAGE_APP_DATA_PATH_PREFIX "/ck42x_wakeup"
 #define COUNTER_SAVE_FILE COUNTER_SAVE_DIR "/counter.bin"
 #define ALARM_SAVE_FILE COUNTER_SAVE_DIR "/alarms.bin"
+#define PREFS_SAVE_FILE COUNTER_SAVE_DIR "/prefs.bin"
 #define COUNTER_SAVE_MAGIC 0x43534B31UL
 #define COUNTER_SAVE_VERSION 1U
 #define ALARM_SAVE_MAGIC 0x414C4B31UL
 #define ALARM_SAVE_VERSION 1U
+#define PREFS_SAVE_MAGIC 0x50524631UL
+#define PREFS_SAVE_VERSION 1U
 
 #define MENU_VISIBLE_ROWS 5U
 #define MENU_FOOTER_ROWS 4U
@@ -103,7 +108,15 @@ typedef struct {
 } AlarmSave;
 
 typedef struct {
+    uint32_t magic;
+    uint16_t version;
+    uint8_t backlight_keep_on;
+    uint8_t reserved;
+} PrefsSave;
+
+typedef struct {
     Gui* gui;
+    NotificationApp* notification;
     ViewPort* view_port;
     FuriMessageQueue* queue;
     bool running;
@@ -119,6 +132,7 @@ typedef struct {
     uint8_t jumper_frame;
     JumperType jumper_type;
     bool counter_enabled;
+    bool backlight_keep_on;
 
     bool subghz_tx_active;
     bool subghz_last_ok;
@@ -699,6 +713,49 @@ static void alarm_load(Ck42xWakeupApp* app) {
     furi_record_close(RECORD_STORAGE);
 }
 
+static void backlight_apply(Ck42xWakeupApp* app) {
+    if(!app->notification) return;
+    notification_message(
+        app->notification,
+        app->backlight_keep_on ? &sequence_display_backlight_enforce_on : &sequence_display_backlight_enforce_auto);
+}
+
+static void prefs_save(Ck42xWakeupApp* app) {
+    Storage* storage = furi_record_open(RECORD_STORAGE);
+    storage_common_mkdir(storage, COUNTER_SAVE_DIR);
+    File* file = storage_file_alloc(storage);
+    PrefsSave save = {
+        .magic = PREFS_SAVE_MAGIC,
+        .version = PREFS_SAVE_VERSION,
+        .backlight_keep_on = app->backlight_keep_on ? 1U : 0U,
+        .reserved = 0U,
+    };
+    if(storage_file_open(file, PREFS_SAVE_FILE, FSAM_WRITE, FSOM_CREATE_ALWAYS)) {
+        storage_file_write(file, &save, sizeof(save));
+        storage_file_close(file);
+    }
+    storage_file_free(file);
+    furi_record_close(RECORD_STORAGE);
+}
+
+static void prefs_load(Ck42xWakeupApp* app) {
+    Storage* storage = furi_record_open(RECORD_STORAGE);
+    storage_common_mkdir(storage, COUNTER_SAVE_DIR);
+    File* file = storage_file_alloc(storage);
+    PrefsSave save = {0};
+    if(storage_file_open(file, PREFS_SAVE_FILE, FSAM_READ, FSOM_OPEN_EXISTING)) {
+        if(storage_file_size(file) == sizeof(save)) {
+            storage_file_read(file, &save, sizeof(save));
+            if(save.magic == PREFS_SAVE_MAGIC && save.version == PREFS_SAVE_VERSION) {
+                app->backlight_keep_on = save.backlight_keep_on != 0U;
+            }
+        }
+        storage_file_close(file);
+    }
+    storage_file_free(file);
+    furi_record_close(RECORD_STORAGE);
+}
+
 static void enter_ring(Ck42xWakeupApp* app, uint8_t alarm_index) {
     app->ringing_alarm = (uint8_t)(alarm_index % ALARM_COUNT);
     app->screen = ScreenRing;
@@ -968,7 +1025,7 @@ static void draw_counter_menu(Canvas* canvas, Ck42xWakeupApp* app) {
 static void draw_about(Canvas* canvas) {
     draw_title(canvas, "About");
     canvas_set_font(canvas, FontSecondary);
-    canvas_draw_str(canvas, 6, 23, "_CK42X WakeUp v2.27");
+    canvas_draw_str(canvas, 6, 23, "_CK42X WakeUp v2.28");
     canvas_draw_str(canvas, 6, 34, "manual-loop alarm lab");
     canvas_draw_str(canvas, 6, 45, "IR Worker / SubG TX");
     canvas_draw_str(canvas, 6, 56, "Alarm+counter save");
@@ -976,13 +1033,14 @@ static void draw_about(Canvas* canvas) {
 }
 
 static void draw_settings(Canvas* canvas, Ck42xWakeupApp* app) {
-    char rows[4][40];
+    char rows[5][40];
     snprintf(rows[0], sizeof(rows[0]), "Clock +1 minute");
     snprintf(rows[1], sizeof(rows[1]), "Clock -1 minute");
-    snprintf(rows[2], sizeof(rows[2]), "Character %s", app->counter_enabled ? jumper_name(app->jumper_type) : "OFF");
-    snprintf(rows[3], sizeof(rows[3]), "Back");
-    const char* ptrs[4] = {rows[0], rows[1], rows[2], rows[3]};
-    draw_menu_list(canvas, "Settings", ptrs, 4U, app->settings_cursor, "Character moved here");
+    snprintf(rows[2], sizeof(rows[2]), "Backlight keep %s", app->backlight_keep_on ? "ON" : "OFF");
+    snprintf(rows[3], sizeof(rows[3]), "Character %s", app->counter_enabled ? jumper_name(app->jumper_type) : "OFF");
+    snprintf(rows[4], sizeof(rows[4]), "Back");
+    const char* ptrs[5] = {rows[0], rows[1], rows[2], rows[3], rows[4]};
+    draw_menu_list(canvas, "Settings", ptrs, 5U, app->settings_cursor, "Backlight persists");
 }
 
 static void draw_ring(Canvas* canvas, Ck42xWakeupApp* app) {
@@ -1269,8 +1327,8 @@ static void handle_counter_menu_input(Ck42xWakeupApp* app, InputKey key) {
 
 static void handle_settings_input(Ck42xWakeupApp* app, InputKey key) {
     if(key == InputKeyBack) app->screen = ScreenMenu;
-    else if(key == InputKeyUp) cursor_up(&app->settings_cursor, 4U);
-    else if(key == InputKeyDown) cursor_down(&app->settings_cursor, 4U);
+    else if(key == InputKeyUp) cursor_up(&app->settings_cursor, 5U);
+    else if(key == InputKeyDown) cursor_down(&app->settings_cursor, 5U);
     else if(key == InputKeyOk) {
         if(app->settings_cursor == 0U) {
             app->seconds += 60U;
@@ -1279,6 +1337,10 @@ static void handle_settings_input(Ck42xWakeupApp* app, InputKey key) {
             app->seconds = app->seconds > 60U ? app->seconds - 60U : 0U;
             ck42x_clock_sync_fields(app);
         } else if(app->settings_cursor == 2U) {
+            app->backlight_keep_on = !app->backlight_keep_on;
+            backlight_apply(app);
+            prefs_save(app);
+        } else if(app->settings_cursor == 3U) {
             app->counter_menu_cursor = 0;
             app->screen = ScreenCounterMenu;
         } else app->screen = ScreenMenu;
@@ -1311,6 +1373,7 @@ int32_t ck42x_moonphase_alarm_app(void* p) {
     app->seconds = ck42x_initial_time_seconds();
     ck42x_clock_sync_fields(app);
     counter_load(app);
+    prefs_load(app);
     app->selected_alarm = 0;
     app->ringing_alarm = 0;
     for(uint8_t i = 0; i < ALARM_COUNT; i++) {
@@ -1332,10 +1395,12 @@ int32_t ck42x_moonphase_alarm_app(void* p) {
 
     app->queue = furi_message_queue_alloc(8, sizeof(InputEvent));
     app->gui = furi_record_open(RECORD_GUI);
+    app->notification = furi_record_open(RECORD_NOTIFICATION);
     app->view_port = view_port_alloc();
     view_port_draw_callback_set(app->view_port, ck42x_draw_callback, app);
     view_port_input_callback_set(app->view_port, ck42x_input_callback, app);
     gui_add_view_port(app->gui, app->view_port, GuiLayerFullscreen);
+    backlight_apply(app);
     view_port_update(app->view_port);
 
     uint8_t loop_count = 0;
@@ -1388,9 +1453,14 @@ int32_t ck42x_moonphase_alarm_app(void* p) {
     stop_alarm_audio();
     counter_save(app);
     alarm_save(app);
+    if(app->notification) {
+        app->backlight_keep_on = false;
+        backlight_apply(app);
+    }
     gui_remove_view_port(app->gui, app->view_port);
     view_port_free(app->view_port);
     furi_record_close(RECORD_GUI);
+    if(app->notification) furi_record_close(RECORD_NOTIFICATION);
     furi_message_queue_free(app->queue);
     free(app);
     return 0;

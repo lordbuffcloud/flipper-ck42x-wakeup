@@ -11,6 +11,7 @@ CK42X WakeUp is a Flipper Zero external app (`.fap`) that turns the device into 
 - IR raw capture/replay per alarm slot
 - Canned Sub-GHz pulse test/transmit path
 - Optional BadKB URL wake triggers for authorized systems
+- Persistent Settings toggle to keep the display backlight on while WakeUp is open
 - Persistent alarm and counter settings under the app data path
 
 ## Time behavior
@@ -53,14 +54,13 @@ https://ck42x.com/tools/ck42x-wakeup/uploader
 
 ## Release artifact
 
-Current source version: `2.27`
+Current source version: `2.28`
 
-The v2.27 build was verified locally with uFBT:
-
+The v2.28 build was verified locally with uFBT:
 ```text
 Target: 7, API: 87.1
-Size: 21724 bytes
-SHA-256: 862067a7cf5c2ac97060e2892d144adb4d24918e358cc2f13dd8bf49726a102d
+Size: 22868 bytes
+SHA-256: 5438063cb2781c964e9fbfe0b62a2868f064bc0912f2015031d95dc2764cb2fc
 ```
 
 ## License
