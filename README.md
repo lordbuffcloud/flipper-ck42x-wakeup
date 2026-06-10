@@ -16,7 +16,7 @@ CK42X WakeUp is a Flipper Zero external app (`.fap`) that turns the device into 
 
 ## Time behavior
 
-WakeUp initializes its clock from the Flipper RTC when the RTC date looks valid (`2024-2099`). If the RTC is clearly invalid, such as a device reporting an old/default year, it falls back to the FAP build time instead of trusting the bad RTC.
+WakeUp initializes its clock from the Flipper RTC when the RTC date looks valid (`2024-2099`). If the RTC is clearly invalid, such as a device reporting an old/default year, it falls back to the FAP build time instead of trusting the bad RTC. After startup, the displayed clock advances from the Flipper kernel tick counter instead of UI-loop iterations, so rapid button input or slow hardware work does not make the clock jump fast/slow or skip an alarm minute.
 
 The CK42X browser uploader also attempts to set the Flipper RTC from the browser's local time before launching the app.
 

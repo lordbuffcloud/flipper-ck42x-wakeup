@@ -13,7 +13,7 @@
 #include <string.h>
 
 #define LOOP_MS 100
-#define LOOPS_PER_SECOND 10
+#define ANIM_TICKS_PER_SECOND 10U
 #define IR_MAX_TIMINGS 160U
 #define ALARM_COUNT 8U
 #define SUBGHZ_FREQ_HZ 433920000UL
@@ -496,7 +496,7 @@ static void draw_counter_scene(Canvas* canvas, Ck42xWakeupApp* app) {
     canvas_draw_line(canvas, 32, 44, 53, 44);
 
     if(app->counter_enabled) {
-        const uint32_t cycle_ticks = COUNTER_CYCLE_SECONDS * LOOPS_PER_SECOND;
+        const uint32_t cycle_ticks = COUNTER_CYCLE_SECONDS * ANIM_TICKS_PER_SECOND;
         uint32_t phase = app->anim_tick % cycle_ticks;
         int16_t x = (int16_t)((phase * 86U) / cycle_ticks) - 16;
         int16_t distance = x > 42 ? (x - 42) : (42 - x);
@@ -1025,7 +1025,7 @@ static void draw_counter_menu(Canvas* canvas, Ck42xWakeupApp* app) {
 static void draw_about(Canvas* canvas) {
     draw_title(canvas, "About");
     canvas_set_font(canvas, FontSecondary);
-    canvas_draw_str(canvas, 6, 23, "_CK42X WakeUp v2.28");
+    canvas_draw_str(canvas, 6, 23, "_CK42X WakeUp v2.29");
     canvas_draw_str(canvas, 6, 34, "manual-loop alarm lab");
     canvas_draw_str(canvas, 6, 45, "IR Worker / SubG TX");
     canvas_draw_str(canvas, 6, 56, "Alarm+counter save");
@@ -1403,7 +1403,8 @@ int32_t ck42x_moonphase_alarm_app(void* p) {
     backlight_apply(app);
     view_port_update(app->view_port);
 
-    uint8_t loop_count = 0;
+    const uint32_t clock_tick_frequency = furi_kernel_get_tick_frequency();
+    uint32_t last_clock_tick = furi_get_tick();
     while(app->running) {
         InputEvent input;
         FuriStatus status = furi_message_queue_get(app->queue, &input, LOOP_MS);
@@ -1439,9 +1440,11 @@ int32_t ck42x_moonphase_alarm_app(void* p) {
         app->anim_tick++;
         if(app->screen == ScreenMain) view_port_update(app->view_port);
 
-        loop_count++;
-        if(loop_count >= LOOPS_PER_SECOND) {
-            loop_count = 0;
+        uint32_t now_tick = furi_get_tick();
+        uint32_t elapsed_ticks = now_tick - last_clock_tick;
+        while(elapsed_ticks >= clock_tick_frequency) {
+            last_clock_tick += clock_tick_frequency;
+            elapsed_ticks -= clock_tick_frequency;
             ck42x_clock_tick(app);
             view_port_update(app->view_port);
         }
